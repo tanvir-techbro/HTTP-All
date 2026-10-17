@@ -1,0 +1,19 @@
+# Build outputs — rebuilt by build.sh, never committed.
+bin/
+target/
+.dub/
+*.o
+*.obj
+*.so
+*.dylib
+*.a
+
+# Harness leftovers.
+__pycache__/
+*.pyc
+
+# Generated results. Raw output is kept locally so any published number can be
+# re-derived, but it is machine-specific and not committed except by the PR that
+# publishes it (CONTRIBUTING.md).
+results/*
+!results/.gitkeep

@@ -1,0 +1,12 @@
+# scenarios.tsv — the fixed benchmark scenarios (SPEC.md 3.1).
+#
+# name <TAB> method <TAB> path <TAB> wrk script (or "-")
+#
+# Every implementation answers these with byte-identical responses, so bytes
+# read and bytes/request are comparable across languages. Add a scenario here
+# and it is picked up by bench.sh and report.py; do not special-case names in
+# the harness.
+plaintext	GET	/	-
+json	GET	/json	-
+health	GET	/health	-
+echo	POST	/echo	harness/lua/echo.lua
