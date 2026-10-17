@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+# Guard against being sourced by a shell that has no BASH_SOURCE (zsh, sh).
+# Without this the substitution below silently yields an empty string and
+# ROOT_DIR becomes the caller's cwd — a wrong root, not an error.
+if [[ -z "${BASH_SOURCE[0]:-}" ]]; then
+  echo "harness/lib.sh must be sourced from bash" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$HARNESS_DIR/.." && pwd)"
 
@@ -189,15 +197,85 @@ discover_impls() {
 # dashes, so Rust/epoll is Rust-epoll.
 impl_name() { printf '%s' "${1//\//-}"; }
 
+# Every implementation declares its tier, runtime, and source language in
+# impl.env (SPEC.md 5.1). Nothing in the harness maps languages to toolchains:
+# a new language is a row in impl.env, not an edit to the harness.
+impl_env_value() {
+  awk -F= -v key="$2" '
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+  ' "$1/impl.env" 2>/dev/null
+}
+
+# Sets HTTP_LAYER, RUNTIME, SOURCE_EXT, TOOLCHAIN_CMD.
+read_impl_env() {
+  local dir=$1
+  HTTP_LAYER="$(impl_env_value "$dir" HTTP_LAYER | tr -d '[:space:]')"
+  RUNTIME="$(impl_env_value "$dir" RUNTIME)"
+  SOURCE_EXT="$(impl_env_value "$dir" SOURCE_EXT | tr -d '[:space:]')"
+  TOOLCHAIN_CMD="$(impl_env_value "$dir" TOOLCHAIN_CMD)"
+  export HTTP_LAYER RUNTIME SOURCE_EXT TOOLCHAIN_CMD
+}
+
+# Empty output means valid; otherwise a human-readable reason (SPEC.md 5.1).
+impl_env_problem() {
+  local dir=$1
+  if [[ ! -f "$dir/impl.env" ]]; then
+    printf 'no impl.env (SPEC.md 5.1)'
+    return
+  fi
+  read_impl_env "$dir"
+  if [[ "$HTTP_LAYER" != "hand-rolled" && "$HTTP_LAYER" != "runtime" ]]; then
+    printf 'HTTP_LAYER=%s (must be hand-rolled or runtime)' "${HTTP_LAYER:-<empty>}"
+    return
+  fi
+  [[ -n "$RUNTIME" ]] || { printf 'RUNTIME is empty'; return; }
+  # Without SOURCE_EXT the LOC column silently reports 0, which reads as "this
+  # implementation costs nothing". Required, not defaulted.
+  [[ -n "$SOURCE_EXT" ]] || { printf 'SOURCE_EXT is empty (LOC would report 0)'; return; }
+  [[ -n "$TOOLCHAIN_CMD" ]] || printf 'TOOLCHAIN_CMD is empty (toolchain version unrecorded)'
+}
+
 # --- misc --------------------------------------------------------------------
+# Implementation-declared source extensions, comma-separated (SPEC.md 5.1).
+# The fallback only matters if impl.env is broken; SOURCE_EXT is required.
+DEFAULT_SOURCE_EXT="c,h,cc,cpp,cxx,hpp,hxx,d,rs,ts,tsx,mts,js,mjs,go,zig,java,kt,kts,cs,fs,ml,hs,ex,exs,cr,nim,swift,php,rb,lua,jl"
+
+# Directory names pruned anywhere in the tree before counting. Build outputs and
+# vendored dependencies must not inflate the cost axis.
+LOC_EXCLUDE_DIRS="bin,target,vendor,node_modules,zig-out,zig-cache,.zig-cache,_build,deps,.stack-work,dist,obj,.dub,.git,__pycache__"
+
 # Non-comment, non-blank line count. The "cost" axis in results.
+#
+# Deliberately approximate: it strips `//`, `/* */`, `*`, and `#` comment styles,
+# which covers the common languages but not every one (Haskell `--`, Lua `--`,
+# OCaml `(* *)` are counted). It is a size signal, not a metric. The extension
+# list comes from the implementation, so a new language needs no harness edit.
 count_loc() {
   local dir=$1
-  find "$dir" -type f \
-    \( -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.cpp' \
-    -o -name '*.hpp' -o -name '*.d' -o -name '*.rs' \) \
-    -not -path '*/bin/*' -not -path '*/target/*' -not -path '*/.dub/*' \
-    -print0 2>/dev/null |
+  local exts="${2:-$DEFAULT_SOURCE_EXT}"
+
+  local -a names=()
+  local e old_ifs=$IFS
+  IFS=','
+  for e in $exts; do
+    e="${e#.}"
+    [[ -n "$e" ]] || continue
+    if [[ ${#names[@]} -eq 0 ]]; then names+=(-name "*.${e}")
+    else names+=(-o -name "*.${e}"); fi
+  done
+  IFS=$old_ifs
+  [[ ${#names[@]} -gt 0 ]] || { echo 0; return; }
+
+  local -a prune=()
+  local p
+  for p in ${LOC_EXCLUDE_DIRS//,/ }; do
+    if [[ ${#prune[@]} -eq 0 ]]; then prune+=(-name "$p")
+    else prune+=(-o -name "$p"); fi
+  done
+
+  find "$dir" \
+    \( "${prune[@]}" \) -prune -o \
+    -type f \( "${names[@]}" \) -print0 2>/dev/null |
     xargs -0 -r awk '
       { sub(/^[ \t]+/, "") }
       /^$/ { next }

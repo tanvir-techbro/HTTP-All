@@ -11,28 +11,56 @@ Read `SPEC.md` first. It is short and it is normative.
 <Language>/
 ├── build.sh     executable, idempotent, optimised release build, no network access
 ├── run.sh       executable, `exec`s the server, honours PORT and HOST
+├── impl.env     declares HTTP_LAYER and RUNTIME (SPEC.md 5.1)
 ├── README.md    see §3 below
 └── ...          your source, wherever you like (src/, Source/, Include/)
 ```
+
+The **tier** is the important part. Write `impl.env` honestly:
+
+```
+HTTP_LAYER=hand-rolled          # you parse HTTP/1.1 yourself, over raw sockets
+# HTTP_LAYER=runtime            # you delegate parsing/framing to your runtime, e.g. node:http
+RUNTIME=go 1.24.0               # the runtime and version these numbers describe
+SOURCE_EXT=go                   # extensions to count for LOC
+TOOLCHAIN_CMD=go version        # checked by `make doctor`, recorded in meta.json
+```
+
+`hand-rolled` means you parse the request line and headers yourself over `node:net`,
+`TcpListener`, `std.socket` or equivalent. `runtime` means your language distribution
+already gives you an HTTP server and you use it. Both are welcome and both get benchmarked —
+but they are reported in separate tables and never ranked against each other, because
+otherwise `node:http` being a tuned C++ implementation would show up as "TypeScript is
+fast" (`SPEC.md` 1.1). Pick the tier the source actually implements; the review checks it.
+
+**Your language does not need to be in the current five.** There is no language table in
+`harness/`: `impl.env` is the only thing the harness learns about your language from. Adding
+a language means adding its row to the `SPEC.md` §2 table (so the reviewer can see which of
+its modules you are treating as standard library) and then writing a normal implementation
+directory. See `SPEC.md` §2.2.
 
 The directory name is the implementation name in every result table. Keep it stable — it is
 the key that joins `meta.json`, `runs.jsonl`, and `summary.csv`.
 
 Multiple implementations of the same language are allowed and encouraged, as long as each is
-a separate directory: `Rust/threads/`, `Rust/mio-free-epoll/`. They appear as
-`Rust-threads` and `Rust-mio-free-epoll` in results. Variants are how you explore a design
-axis (threads vs event loop, buffered vs streaming) *without* conflating it with the
-language.
+a separate directory: `Rust/threads/`, `Rust/epoll/`, `TS/node/`, `TS/bun/`. They appear as
+`Rust-threads`, `Rust-epoll`, `TS-node`, `TS-bun` in results. Variants are how you explore a
+design axis (threads vs event loop, Node vs Bun) *without* conflating it with the language.
 
 ## 2. Satisfy the contract
 
 - Standard library only — the dependency table in `SPEC.md` §2 is the rule, and the review
-  will check it.
+  will check it. A compiler or type checker is toolchain and fine to depend on; a package
+  the server *loads while serving* is not. No network access in `build.sh` (`SPEC.md` 2.1).
+- `impl.env` present and honest: the right `HTTP_LAYER`, and the `RUNTIME` version the
+  numbers were produced on.
 - Exact response bytes, exact header order, no extra headers. Rationale is in `SPEC.md` §3.2:
   a `Date` header alone would swamp a 14-byte body and make `bytes/request` meaningless.
 - `LISTENING <host>:<port>` on stdout after `listen()`, before anything else.
-- Optimised release build. Record the flags.
-- Exit 0 on `SIGTERM`.
+- Optimised release build. Record the flags. For a JIT runtime, no type checking or
+  development instrumentation in the request path.
+- Exit 0 on `SIGTERM` — install a handler if your runtime dies of the signal by default
+  (Node exits 143).
 
 ## 3. Write the implementation README
 
@@ -61,7 +89,7 @@ failing implementation gets no published numbers rather than a partial table.
 
 The PR must include:
 
-1. The implementation directory.
+1. The implementation directory (`build.sh`, `run.sh`, `impl.env`, `README.md`, sources).
 2. `results/<run-id>/` for the machine it ran on, **with `meta.json`**.
 3. A `meta.json` where `"publishable": true` — the harness sets this to `false` if the CPU
    governor was not `performance` or the run was otherwise not comparable.
@@ -72,24 +100,31 @@ The PR must include:
 
 For the contributor and for whoever reviews it:
 
-- [ ] Standard library only; no third-party HTTP, framework, or event-loop dependency.
-- [ ] `build.sh` and `run.sh` are executable, and `run.sh` uses `exec`.
+- [ ] Standard library only; no third-party HTTP, framework, or event-loop dependency. No
+      network access in `build.sh`.
+- [ ] `build.sh`, `run.sh`, and `impl.env` are present and executable where applicable.
+- [ ] `run.sh` uses `exec`.
+- [ ] `impl.env` declares a truthful `HTTP_LAYER`, a versioned `RUNTIME`, a `SOURCE_EXT`
+      covering the implementation's sources, and a working `TOOLCHAIN_CMD`.
+- [ ] A new language has a row in the `SPEC.md` §2 dependency table saying which of its own
+      modules count as standard library.
 - [ ] Optimised release build; flags recorded in the implementation README.
 - [ ] `LISTENING` handshake present and flushed after `listen()`.
 - [ ] `PORT` and `HOST` honoured. Defaults are 8080 and 127.0.0.1.
+- [ ] Exits 0 on `SIGTERM` (a handler is installed if the runtime needs one).
 - [ ] Every row of the `SPEC.md` §3.1 endpoint table implemented, with the exact bytes.
 - [ ] No `Date`, no `Server`, no other extra headers.
 - [ ] `Content-Length` on every response; no chunked responses.
 - [ ] HTTP/1.1 keep-alive works; `Connection: close` honoured.
 - [ ] Request bodies consumed (or the connection closed) before the next request is parsed.
 - [ ] 16 KiB header limit → 431; 1 MiB body limit → 413; body-less `POST /echo` → 411.
+- [ ] Chunked `POST /echo` either decodes-and-echoes correctly, or is cleanly rejected.
 - [ ] 400/411/413/431/505 responses close the connection.
 - [ ] No artificial delays, sleeps, busy-waits, or request coalescing.
-- [ ] Exits 0 on `SIGTERM`.
-- [ ] `make conform` passes.
 - [ ] Implementation README states toolchain, flags, concurrency model, hand-rolled parts,
       limitations, and tuning knobs.
 - [ ] No measured numbers recorded by hand.
+- [ ] `make conform` passes.
 
 ## House style
 

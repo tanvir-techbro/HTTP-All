@@ -1,11 +1,22 @@
 # HTTP-All
 
-One HTTP/1.1 server, four languages, one benchmark. C, C++, D, and Rust each implement the
-same four endpoints using **only their standard library**, and get measured the same way.
+One HTTP/1.1 server, five languages, one benchmark. C, C++, D, Rust, and TypeScript each
+implement the same four endpoints using **only their standard library**, and get measured
+the same way.
 
 The point is not to find "the fastest language". The point is to hold the protocol
 constant and see what the trade-offs actually look like: throughput, tail latency, memory,
 CPU cost per request, and how much source code each one costs.
+
+Two things make that comparison hold together:
+
+- **Identical bytes on the wire.** A fixed header set with no `Date` and no `Server`, so
+  `bytes/request` means the same thing everywhere.
+- **Tiers.** Some runtimes ship an HTTP server (`node:http`) and some do not (`Rust`'s
+  `std` gives you a socket). Each implementation declares its HTTP layer in `impl.env`, and
+  results are grouped by it and **never ranked across it** — so you never see "Node's C++
+  HTTP stack" beating "hand-rolled Rust" and mistake it for a language result. See
+  [`SPEC.md` §1.1](SPEC.md).
 
 ## Status
 
@@ -14,7 +25,7 @@ CPU cost per request, and how much source code each one costs.
 | `SPEC.md` — protocol, endpoint, build/run contract | **v0.1.0 draft** |
 | `CONTRIBUTING.md`, `docs/methodology.md` | drafted |
 | `harness/` — conformance, bench runner, reporter | written, **not yet validated against a real server** |
-| `C/`, `CPP/`, `D/`, `Rust/` | not started |
+| `C/`, `CPP/`, `D/`, `Rust/`, `TS/` | not started |
 
 ## Quickstart
 
@@ -77,8 +88,16 @@ harness/
   lua/echo.lua       POST body for the echo scenario
   lib.sh             shared shell helpers
 
-C/ CPP/ D/ Rust/     empty, awaiting implementations
+C/ CPP/ D/ Rust/ TS/   empty, awaiting implementations
 results/             generated; raw output kept so any number can be re-derived
+```
+
+An implementation directory is `build.sh` + `run.sh` + `impl.env` + `README.md`. `impl.env`
+declares which tier the numbers belong to:
+
+```
+HTTP_LAYER=hand-rolled      # hand-rolled | runtime
+RUNTIME=node 26.10.0
 ```
 
 ## Adding an implementation

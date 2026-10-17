@@ -117,6 +117,8 @@ def summarise(runs) -> list[dict]:
         row = {
             "impl": impl,
             "scenario": scenario,
+            "http_layer": measurements[0].get("http_layer") or "hand-rolled",
+            "runtime": measurements[0].get("runtime") or "unknown",
             "runs": len(measurements),
             "rps": median(rpss),
             "rps_spread_pct": spread(rpss),
@@ -146,6 +148,39 @@ def human_bytes(n) -> str:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n / 1:.0f} {unit}"
         n /= 1024
     return f"{n:.0f} GiB"
+
+
+TIER_TITLE = {
+    "hand-rolled": ("Hand-rolled HTTP", "each implementation parses HTTP/1.1 itself "
+                    "over the runtime's raw sockets — this is the ranking that compares "
+                    "languages"),
+    "runtime": ("Runtime-provided HTTP", "HTTP parsing and framing come from the runtime's "
+                "own distribution (e.g. `node:http`). Compared within this group only, and "
+                "**not** against the group above — the gap between the two groups is what "
+                "the runtime buys, which is a different question from which language is "
+                "faster"),
+}
+
+
+def tier_table(rows: list[dict]) -> list[str]:
+    lines = [
+        "| impl | runtime | scenario | req/s | p50 | p99 | peak RSS | CPU ms/req | "
+        "binary | LOC | spread |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| `{r['impl']}` | {r['runtime']} | {r['scenario']} "
+            f"| {fmt(r['rps'], ',.0f')} "
+            f"| {fmt(r['p50'], '.2f', ' ms')} "
+            f"| {fmt(r['p99'], '.2f', ' ms')} "
+            f"| {fmt(r['peak_rss_kb'] / 1024 if r['peak_rss_kb'] else None, ',.1f', ' MiB')} "
+            f"| {fmt(r['cpu_ms_per_req'], '.4f')} "
+            f"| {human_bytes(r['binary_bytes'])} "
+            f"| {fmt(r['loc'], ',.0f')} "
+            f"| {fmt(r['rps_spread_pct'], '.1f', '%')} |"
+        )
+    return lines
 
 
 def markdown(rows: list[dict], meta: dict) -> str:
@@ -180,28 +215,46 @@ def markdown(rows: list[dict], meta: dict) -> str:
                      + ", ".join(f"`{r['impl']}/{r['scenario']}`" for r in unstable))
         lines.append("")
 
-    lines.append("| impl | scenario | req/s | p50 | p99 | peak RSS | CPU ms/req | "
-                 "binary | LOC | spread |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
-    for r in rows:
-        lines.append(
-            f"| `{r['impl']}` | {r['scenario']} "
-            f"| {fmt(r['rps'], ',.0f')} "
-            f"| {fmt(r['p50'], '.2f', ' ms')} "
-            f"| {fmt(r['p99'], '.2f', ' ms')} "
-            f"| {fmt(r['peak_rss_kb'] and r['peak_rss_kb'] / 1024, ',.1f', ' MiB')} "
-            f"| {fmt(r['cpu_ms_per_req'], '.4f')} "
-            f"| {human_bytes(r['binary_bytes'])} "
-            f"| {fmt(r['loc'], ',.0f')} "
-            f"| {fmt(r['rps_spread_pct'], '.1f', '%')} |"
-        )
-    lines.append("")
+    # Grouped by tier and never ranked across tiers (SPEC.md 1.1, 7.1).
+    for tier in ("hand-rolled", "runtime"):
+        tier_rows = [r for r in rows if r["http_layer"] == tier]
+        if not tier_rows:
+            continue
+        title, blurb = TIER_TITLE[tier]
+        lines.append(f"### {title}")
+        lines.append("")
+        lines.append(blurb)
+        lines.append("")
+        lines.extend(tier_table(tier_rows))
+        lines.append("")
+
+    other = [r for r in rows if r["http_layer"] not in TIER_TITLE]
+    if other:
+        lines.append("### Unclassified")
+        lines.append("")
+        lines.append("These declare no valid `HTTP_LAYER` and cannot be grouped; treat them "
+                     "as unreliable (SPEC.md 5.1).")
+        lines.append("")
+        lines.extend(tier_table(other))
+        lines.append("")
+
     lines.append("`req/s` is the median of the runs and describes **closed-loop maximum "
                  "throughput**; the p50/p99 columns describe queueing at that saturation "
                  "point, not latency at a target rate. `CPU ms/req` is the most portable "
                  "number here — it is how much CPU the server spends per request, "
-                 "independent of how many cores it had. See `docs/methodology.md`.")
+                 "independent of how many cores it had. Peak RSS is not comparable across "
+                 "runtimes, and `binary` is blank for interpreted implementations. See "
+                 "`docs/methodology.md`.")
     return "\n".join(lines)
+
+
+def rel(path: Path) -> str:
+    """Path relative to the repo when it is inside it; absolute otherwise
+    (`--out /tmp/...` is legitimate)."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def update_readme(table: str) -> bool:
@@ -217,7 +270,7 @@ def update_readme(table: str) -> bool:
     i_line_end = text.index("-->", i) + len("-->")
     new = text[:i_line_end] + "\n" + table + "\n\n" + text[j:]
     path.write_text(new)
-    print(f"  updated {path.relative_to(ROOT)}")
+    print(f"  updated {rel(path)}")
     return True
 
 
@@ -244,9 +297,9 @@ def main() -> int:
     rows = summarise(runs)
 
     # summary.csv — one row per (impl, scenario), medians across runs.
-    fields = ["impl", "scenario", "runs", "connections", "rps", "rps_spread_pct",
-              "p50", "p75", "p90", "p99", "peak_rss_kb", "cpu_ms_per_req",
-              "binary_bytes", "loc"]
+    fields = ["impl", "http_layer", "runtime", "scenario", "runs", "connections", "rps",
+              "rps_spread_pct", "p50", "p75", "p90", "p99", "peak_rss_kb",
+              "cpu_ms_per_req", "binary_bytes", "loc"]
     csv_path = out_dir / "summary.csv"
     with open(csv_path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
@@ -261,7 +314,7 @@ def main() -> int:
         f"# Results — {out_dir.name}\n\n{table}\n"
     )
 
-    print(f"  {len(rows)} cells -> {(csv_path).relative_to(ROOT)}")
+    print(f"  {len(rows)} cells -> {rel(csv_path)}")
     if args.update_readme:
         update_readme(table)
     return 0

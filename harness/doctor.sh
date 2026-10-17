@@ -94,15 +94,6 @@ fi
 declare -A SEEN_TOOL
 for impl in "${IMPLS[@]:-}"; do
   [[ -n "$impl" ]] || continue
-  # The toolchain each implementation will use, best-effort by file extension.
-  tool="?"
-  if find "$ROOT_DIR/$impl" -name '*.rs' -print -quit 2>/dev/null | grep -q .; then
-    tool="rustc"; [[ -f "$ROOT_DIR/$impl/Cargo.toml" ]] && tool="cargo"
-  elif find "$ROOT_DIR/$impl" -name '*.d' -print -quit 2>/dev/null | grep -q .; then
-    for c in dub ldc2 dmd; do command -v "$c" >/dev/null 2>&1 && { tool="$c"; break; }; done
-  elif find "$ROOT_DIR/$impl" \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) -print -quit 2>/dev/null | grep -q .; then
-    tool="${CC:-cc}"
-  fi
 
   if [[ -f "$ROOT_DIR/$impl/build.sh" && ! -x "$ROOT_DIR/$impl/build.sh" ]]; then
     warn "$impl/build.sh is not executable"
@@ -114,13 +105,28 @@ for impl in "${IMPLS[@]:-}"; do
   fi
   [[ -f "$ROOT_DIR/$impl/run.sh" ]] || { warn "$impl has no run.sh"; PROBLEMS=$((PROBLEMS + 1)); }
 
-  printf '  %-22s %s\n' "$impl" "$tool"
-  if [[ "$tool" != "?" && -z "${SEEN_TOOL[$tool]:-}" ]]; then
-    SEEN_TOOL[$tool]=1
-    if command -v "$tool" >/dev/null 2>&1; then
-      printf '    %-20s %s\n' "" "$("$tool" --version 2>&1 | head -1)"
+  # The tier every number from this implementation will be filed under
+  # (SPEC.md 1.1, 5.1). An undeclared tier cannot be grouped, so it is an error.
+  problem="$(impl_env_problem "$ROOT_DIR/$impl")"
+  if [[ -n "$problem" ]]; then
+    warn "$impl: $problem"
+    PROBLEMS=$((PROBLEMS + 1))
+    tier=""
+  else
+    tier=" [$HTTP_LAYER]"
+  fi
+  read_impl_env "$ROOT_DIR/$impl"
+
+  # The toolchain comes from impl.env, not from a language table in here: adding
+  # a language must not require editing the harness (SPEC.md 2.2, 5.1).
+  printf '  %-22s %s%s\n' "$impl" "${RUNTIME:-?}" "$tier"
+
+  if [[ -n "$TOOLCHAIN_CMD" && -z "${SEEN_TOOL[$TOOLCHAIN_CMD]:-}" ]]; then
+    SEEN_TOOL[$TOOLCHAIN_CMD]=1
+    if out="$($TOOLCHAIN_CMD 2>&1 | head -1)"; then
+      printf '    %-20s %s\n' "" "$out"
     else
-      warn "$tool not found (needed by $impl)"
+      warn "toolchain command failed: $TOOLCHAIN_CMD (needed by $impl)"
       PROBLEMS=$((PROBLEMS + 1))
     fi
   fi

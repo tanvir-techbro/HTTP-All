@@ -395,21 +395,33 @@ def test_no_content_length(host, port) -> None:
 
 
 def test_chunked(host, port) -> None:
-    # Chunked request bodies may be unsupported, but must be rejected cleanly
-    # (411 or 501) rather than hung on (SPEC.md 3.4).
+    # SPEC.md 3.4: supporting chunked bodies is optional. Rejecting cleanly
+    # (411/501/400) and decoding correctly (200 with the decoded body) are both
+    # conformant -- what is not allowed is hanging or mis-framing. node:http
+    # decodes chunked for free, so a "must reject" test would fail a
+    # spec-compliant server.
+    payload = b"hello"
     conn = Conn(host, port)
     try:
         conn.send(
             b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
             b"5\r\nhello\r\n0\r\n\r\n"
         )
-        status, _, _, _ = conn.read_response()
+        status, _, body, _ = conn.read_response()
         code = int(status.split(b" ")[1])
-        ok = code in (411, 501, 400)
-        record("chunked request body is rejected cleanly", PASS if ok else FAIL,
-               "" if ok else f"got {status!r} (want 411/501/400)")
+        if code == 200:
+            ok = body == payload
+            record("chunked request body: decoded or cleanly rejected",
+                   PASS if ok else FAIL,
+                   "" if ok else f"200 but body was {body!r}, expected {payload!r}")
+        elif code in (411, 501, 400):
+            record("chunked request body: decoded or cleanly rejected", PASS,
+                   f"rejected with {code}; allowed by SPEC.md 3.4")
+        else:
+            record("chunked request body: decoded or cleanly rejected", FAIL,
+                   f"got {status!r} (want 200-with-body, or 411/501/400)")
     except (ProtocolError, OSError) as exc:
-        record("chunked request body is rejected cleanly", FAIL, str(exc))
+        record("chunked request body: decoded or cleanly rejected", FAIL, str(exc))
     finally:
         conn.close()
 
@@ -442,8 +454,47 @@ def test_http10(host, port) -> None:
         record("HTTP/1.0 is handled (optional)", WARN, f"got {status!r}")
 
 
-def run_suite(host: str, port: int) -> bool:
-    print(f"\n\x1b[1mConformance against {host}:{port}\x1b[0m\n")
+def validate_impl_env(impl_dir: Path) -> None:
+    """SPEC.md 5.1 / 6.13: every implementation declares its tier and runtime."""
+    env_path = impl_dir / "impl.env"
+    if not env_path.exists():
+        record("impl.env present and valid", FAIL,
+               "no impl.env — see SPEC.md 5.1 for the required keys")
+        return
+
+    values: dict[str, str] = {}
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.split("#")[0].strip()
+
+    layer = values.get("HTTP_LAYER")
+    runtime = values.get("RUNTIME")
+    source_ext = values.get("SOURCE_EXT")
+    toolchain = values.get("TOOLCHAIN_CMD")
+
+    missing = [k for k, v in (("RUNTIME", runtime), ("SOURCE_EXT", source_ext),
+                              ("TOOLCHAIN_CMD", toolchain)) if not v]
+    if layer not in ("hand-rolled", "runtime"):
+        record("impl.env present and valid", FAIL,
+               f"HTTP_LAYER={layer!r} (must be 'hand-rolled' or 'runtime')")
+    elif missing:
+        # No harness default exists for these: without SOURCE_EXT the LOC column
+        # reports 0, which reads as "this implementation costs nothing".
+        record("impl.env present and valid", FAIL, f"missing: {', '.join(missing)}")
+    else:
+        record("impl.env present and valid", PASS,
+               f"{layer} tier, runtime {runtime}, source {source_ext}")
+
+
+def run_suite(host: str, port: int, impl_dir: Path | None = None) -> bool:
+    if impl_dir is None:
+        print(f"\n\x1b[1mConformance against {host}:{port}\x1b[0m\n")
+    else:
+        print(f"\n\x1b[1m=== {impl_dir.name} ===\x1b[0m\n")
+        validate_impl_env(impl_dir)
 
     def guard(fn, *args, **kwargs):
         """A test that raises is a failure, not a traceback: a server that dies
@@ -574,9 +625,7 @@ def main() -> int:
             if not impl_dir.is_dir():
                 sys.exit(f"no such implementation directory: {impl_dir}")
             proc, port = start_impl(impl_dir, args.verbose)
-            label = impl_dir.relative_to(ROOT)
-            print(f"\x1b[1m=== {label} ===\x1b[0m")
-            passed = run_suite(args.host, port)
+            passed = run_suite(args.host, port, impl_dir=impl_dir)
         else:
             passed = run_suite(args.host, args.port)
         return 0 if passed else 1

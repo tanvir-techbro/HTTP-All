@@ -101,6 +101,10 @@ for impl in "${IMPLS[@]}"; do
   [[ -d "$ROOT_DIR/$impl" ]] || fail "no such implementation directory: $impl"
   [[ -f "$ROOT_DIR/$impl/build.sh" ]] || fail "$impl has no build.sh"
   [[ -f "$ROOT_DIR/$impl/run.sh" ]] || fail "$impl has no run.sh"
+  # Results are grouped by tier, so an undeclared tier cannot be published at all
+  # (SPEC.md 1.1, 5.1, 7.1).
+  problem="$(impl_env_problem "$ROOT_DIR/$impl")"
+  [[ -z "$problem" ]] || fail "$impl: $problem"
 done
 
 SCEN_FILE="$HARNESS_DIR/scenarios.tsv"
@@ -128,6 +132,10 @@ OUT="${OUT%/}"
 title "Plan"
 printf '  %-20s %s\n' "results" "${OUT#$ROOT_DIR/}"
 printf '  %-20s %s\n' "implementations" "${IMPLS[*]}"
+for impl in "${IMPLS[@]}"; do
+  read_impl_env "$ROOT_DIR/$impl"
+  printf '    %-18s %s (%s)\n' "$(impl_name "$impl")" "$HTTP_LAYER" "$RUNTIME"
+done
 printf '  %-20s %s\n' "scenarios" "${SCEN_NAMES[*]}"
 printf '  %-20s %sx%s for %s (%ss warmup)\n' "load" "$THREADS" "$CONNS" "$DURATION" "$WARMUP"
 printf '  %-20s %s\n' "runs" "$RUNS (+1 warmup)"
@@ -212,7 +220,15 @@ for impl in "${IMPLS[@]}"; do
   name="$(impl_name "$impl")"
   bin="$ROOT_DIR/$impl/bin/server"
   if [[ -f "$bin" ]]; then BIN_BYTES=$(stat -c %s "$bin"); else BIN_BYTES=0; fi
-  LOC="$(count_loc "$ROOT_DIR/$impl")"
+
+  # Declared by the implementation, so a new language needs no harness edit
+  # (SPEC.md 5.1). LOC is meaningless without the declared extensions.
+  read_impl_env "$ROOT_DIR/$impl"
+  LOC="$(count_loc "$ROOT_DIR/$impl" "$SOURCE_EXT")"
+  TOOLCHAIN_VERSION="unknown"
+  if [[ -n "$TOOLCHAIN_CMD" ]]; then
+    TOOLCHAIN_VERSION="$($TOOLCHAIN_CMD 2>&1 | head -1)" || true
+  fi
 
   for idx in "${!SCEN_NAMES[@]}"; do
     S_NAME="${SCEN_NAMES[$idx]}"
@@ -231,9 +247,11 @@ for impl in "${IMPLS[@]}"; do
       log "$name / $S_NAME — run $run/$RUNS"
       measure "$name" "$impl" "$port" "$outfile" "$DURATION"
       log_run "impl=$name" "impl_dir=$impl" "scenario=$S_NAME" "run=$run" \
+        "http_layer=$HTTP_LAYER" "runtime=$RUNTIME" \
         "duration_s=${DURATION%s}" "connections=$CONNS" "threads=$THREADS" \
         "peak_rss_kb=$RUN_RSS_KB" "cpu_ticks=$RUN_TICKS" "clk_tck=$CLK" \
         "binary_bytes=$BIN_BYTES" "loc=$LOC" "generator=$GENERATOR" \
+        "toolchain=$TOOLCHAIN_VERSION" \
         "server_cpus=$SERVER_CPUS" "load_cpus=$LOAD_CPUS" "output=$(basename "$outfile")"
     done
   done
@@ -267,13 +285,6 @@ def gov():
         if g not in seen:
             seen.append(g)
     return seen
-
-def ver(cmd):
-    try:
-        r = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=10)
-        return (r.stdout or r.stderr).splitlines()[0].strip()
-    except (OSError, subprocess.SubprocessError, IndexError):
-        return None
 
 def cpu_model():
     try:
@@ -315,11 +326,33 @@ meta = {
                "connections": int(os.environ.get("CONNS", "0")),
                "threads": int(os.environ.get("THREADS", "0")),
                "warmup_s": int(os.environ.get("WARMUP", "0"))},
-    "toolchains": {c: v for c in ("cc", "gcc", "g++", "clang", "rustc", "cargo",
-                                  "dmd", "ldc2", "dub")
-                   for v in [ver(c)] if v},
+    "toolchains": {},   # filled from impl.env declarations below; no language table here
+
     "elapsed_s": int(os.environ.get("ELAPSED", "0")),
 }
+
+# Per-implementation facts, taken from the run log so the tier that each number
+# belongs to travels with the results (SPEC.md 1.1, 7.1).
+impls = {}
+runs_path = os.path.join(os.path.dirname(out), "runs.jsonl")
+if os.path.exists(runs_path):
+    with open(runs_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            impls.setdefault(row["impl"], {
+                "http_layer": row.get("http_layer"),
+                "runtime": row.get("runtime"),
+                "toolchain": row.get("toolchain"),
+                "binary_bytes": row.get("binary_bytes"),
+                "loc": row.get("loc"),
+            })
+            if row.get("toolchain") and row["toolchain"] != "unknown":
+                meta["toolchains"][row["impl"]] = row["toolchain"]
+meta["implementations"] = impls
+
 with open(out, "w") as fh:
     json.dump(meta, fh, indent=2)
     fh.write("\n")

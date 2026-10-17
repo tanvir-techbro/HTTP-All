@@ -136,6 +136,48 @@ Derived metrics:
 - **Binary size** and **non-comment LOC** — the cost axis. A 4-core event loop that is
   twice as fast and 40 lines longer is a different trade-off from one 900 lines longer.
 
+## Tiers
+
+Some runtimes ship an HTTP server and some do not. `node:http` is a tuned HTTP/1.1
+implementation; Rust's `std` gives you a `TcpListener` and nothing else. Measuring both in
+one table would attribute the runtime's HTTP stack to the language.
+
+So every implementation declares `HTTP_LAYER` in `impl.env` (`SPEC.md` 5.1), results are
+grouped by it (§7.1), and **the two groups are never ranked against each other**:
+
+- **`hand-rolled`** — the implementation parses HTTP/1.1 itself over raw sockets. This is
+  the group where a language-vs-language ranking is meaningful, because every entry wrote
+  the same layer by hand.
+- **`runtime`** — parsing and framing come from the language distribution. Useful, and
+  worth measuring, but the number describes the runtime's HTTP stack.
+
+The gap between the two groups *in the same language* is one of the more interesting results
+this repository can produce: put `TS/hand-rolled/` and `TS/runtime/` next to each other and
+you have measured what the runtime's built-in server is worth. It just has to be labelled as
+that, rather than folded into a ranking.
+
+Two metrics need care once more than one runtime is involved:
+
+- **Peak RSS is not comparable across runtimes.** A JIT runtime's baseline is tens of MiB
+  before it serves a request; a C server's high-water mark is a few MiB total. Compare RSS
+  within a runtime, and use `CPU ms/req` when comparing across them.
+- **`binary` is blank for interpreted implementations** and must not be averaged into a
+  compiled column.
+- **`LOC` is contributor-declared**, from `SOURCE_EXT` in `impl.env`, and the counter strips
+  only `//`, `/* */`, `*`, and `#` comments. Treat it as an order-of-magnitude cost signal,
+  not a measurement, and never as a tiebreaker.
+
+## Languages other than the five
+
+Nothing in `harness/` knows any language. A contribution in Go, Zig, Java, Elixir, or
+anything else needs a directory with `build.sh`, `run.sh`, `impl.env`, and `README.md`, plus
+a row in the `SPEC.md` §2 table. No harness edit, no extension list to update.
+
+The stdlib-only rule does constrain where such a contribution can land (`SPEC.md` §2.2): a
+language that ships an HTTP server in its standard library can only enter the `runtime` tier
+without its author also writing a parser, and a language with no standard-library HTTP server
+has no `runtime` option at all.
+
 ## Rules for a fair comparison
 
 1. Conformance must pass. A failed implementation gets no numbers.
@@ -149,6 +191,8 @@ Derived metrics:
 8. Publish the raw generator output alongside the summary.
 9. If an implementation is changed, all of its numbers are invalidated and it is re-run.
 10. Never compare numbers from two different machines as if they were one ranking.
+11. Never rank across tiers. A `runtime` entry and a `hand-rolled` entry answer different
+    questions (see Tiers above).
 
 ## Threats to validity
 

@@ -1,7 +1,16 @@
-# Build outputs — rebuilt by build.sh, never committed.
+# Build outputs — rebuilt by build.sh, never committed. Kept broad on purpose:
+# a contribution in an unanticipated language must not have to fight .gitignore
+# to keep its build tree out of the repo.
 bin/
 target/
 .dub/
+zig-out/
+zig-cache/
+_build/
+deps/
+.stack-work/
+dist/
+obj/
 *.o
 *.obj
 *.so
@@ -11,6 +20,11 @@ target/
 # Harness leftovers.
 __pycache__/
 *.pyc
+
+# Runtime dependency directories — nothing here may be loaded by a server
+# (SPEC.md 2.1). Present only if someone ran a package manager by mistake.
+node_modules/
+package-lock.json
 
 # Generated results. Raw output is kept locally so any published number can be
 # re-derived, but it is machine-specific and not committed except by the PR that
