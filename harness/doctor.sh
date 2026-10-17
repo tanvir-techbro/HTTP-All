@@ -23,20 +23,20 @@ printf '  %-22s %s\n' "CPU" "$(awk -F: '/^model name/ { gsub(/^ +/, "", $2); pri
 # --- governor ---------------------------------------------------------------
 # schedutil/ondemand ramp frequency with load, which inflates variance under a
 # 30s benchmark. See docs/methodology.md.
-GOV_UNIQ="$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null \
-  | sort -u | tr '\n' ',')"
+GOV_UNIQ="$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null |
+      sort -u | tr '\n' ',')"
 if [[ -z "$GOV_UNIQ" ]]; then
-  warn "no cpufreq governor exposed (VM?) — frequency behaviour is unknown"
+      warn "no cpufreq governor exposed (VM?) — frequency behaviour is unknown"
 else
-  printf '  %-22s %s\n' "governor" "${GOV_UNIQ%,}"
-  if [[ "$GOV_UNIQ" != "performance," ]]; then
-    warn "governor is '${GOV_UNIQ%,}', not 'performance' — results will not be publishable"
-    echo "           fix: sudo cpupower frequency-set -g performance"
-    echo "           or:  echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
-    PROBLEMS=$((PROBLEMS + 1))
-  else
-    ok "governor is 'performance'"
-  fi
+      printf '  %-22s %s\n' "governor" "${GOV_UNIQ%,}"
+      if [[ "$GOV_UNIQ" != "performance," ]]; then
+            warn "governor is '${GOV_UNIQ%,}', not 'performance' — results will not be publishable"
+            echo "           fix: sudo cpupower frequency-set -g performance"
+            echo "           or:  echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+            PROBLEMS=$((PROBLEMS + 1))
+      else
+            ok "governor is 'performance'"
+      fi
 fi
 
 # --- CPU set / pinning ------------------------------------------------------
@@ -44,104 +44,108 @@ title "Pinning"
 printf '  %-22s %s\n' "server CPUs" "$SERVER_CPUS"
 printf '  %-22s %s\n' "load CPUs" "$LOAD_CPUS"
 if ! command -v taskset >/dev/null 2>&1; then
-  fail "taskset is required for core pinning (util-linux)"
+      fail "taskset is required for core pinning (util-linux)"
 fi
 for pair in "server:$SERVER_CPUS" "load:$LOAD_CPUS"; do
-  label=${pair%%:*}; want=${pair#*:}
-  missing="$(cpus_available "$want")"
-  if [[ -n "$missing" ]]; then
-    warn "$label CPUs $want are not available here (missing: $missing)"
-    PROBLEMS=$((PROBLEMS + 1))
-  else
-    ok "$label CPUs $want available"
-  fi
+      label=${pair%%:*}
+      want=${pair#*:}
+      missing="$(cpus_available "$want")"
+      if [[ -n "$missing" ]]; then
+            warn "$label CPUs $want are not available here (missing: $missing)"
+            PROBLEMS=$((PROBLEMS + 1))
+      else
+            ok "$label CPUs $want available"
+      fi
 done
 
 # --- load generator ---------------------------------------------------------
 title "Load generator"
 if detect_generator; then
-  printf '  %-22s %s\n' "generator" "$GENERATOR"
-  printf '  %-22s %s\n' "path" "$WRK"
-  if [[ "$GENERATOR" == "wrk2" ]]; then
-    warn "only wrk2 found; closed-loop runs will use a high fixed rate (-R 1000000)"
-  fi
-  ok "$GENERATOR is available"
+      printf '  %-22s %s\n' "generator" "$GENERATOR"
+      printf '  %-22s %s\n' "path" "$WRK"
+      if [[ "$GENERATOR" == "wrk2" ]]; then
+            warn "only wrk2 found; closed-loop runs will use a high fixed rate (-R 1000000)"
+      fi
+      ok "$GENERATOR is available"
 else
-  warn "neither wrk nor wrk2 found — benchmarks cannot run"
-  generator_install_hint
-  PROBLEMS=$((PROBLEMS + 1))
+      warn "neither wrk nor wrk2 found — benchmarks cannot run"
+      generator_install_hint
+      PROBLEMS=$((PROBLEMS + 1))
 fi
 
 # --- harness runtime --------------------------------------------------------
 title "Harness requirements"
 for t in make python3; do
-  if command -v "$t" >/dev/null 2>&1; then
-    printf '  %-22s %s\n' "$t" "$("$t" --version 2>&1 | head -1)"
-  else
-    warn "$t is required"
-    PROBLEMS=$((PROBLEMS + 1))
-  fi
+      if command -v "$t" >/dev/null 2>&1; then
+            printf '  %-22s %s\n' "$t" "$("$t" --version 2>&1 | head -1)"
+      else
+            warn "$t is required"
+            PROBLEMS=$((PROBLEMS + 1))
+      fi
 done
 
 # --- toolchains and implementations -----------------------------------------
 title "Implementations"
 mapfile -t IMPLS < <(discover_impls)
 if [[ ${#IMPLS[@]} -eq 0 ]]; then
-  warn "no implementation directories found (need <dir>/build.sh)"
-  PROBLEMS=$((PROBLEMS + 1))
+      warn "no implementation directories found (need <dir>/build.sh)"
+      PROBLEMS=$((PROBLEMS + 1))
 fi
 
 declare -A SEEN_TOOL
 for impl in "${IMPLS[@]:-}"; do
-  [[ -n "$impl" ]] || continue
+      [[ -n "$impl" ]] || continue
 
-  if [[ -f "$ROOT_DIR/$impl/build.sh" && ! -x "$ROOT_DIR/$impl/build.sh" ]]; then
-    warn "$impl/build.sh is not executable"
-    PROBLEMS=$((PROBLEMS + 1))
-  fi
-  if [[ -f "$ROOT_DIR/$impl/run.sh" && ! -x "$ROOT_DIR/$impl/run.sh" ]]; then
-    warn "$impl/run.sh is not executable"
-    PROBLEMS=$((PROBLEMS + 1))
-  fi
-  [[ -f "$ROOT_DIR/$impl/run.sh" ]] || { warn "$impl has no run.sh"; PROBLEMS=$((PROBLEMS + 1)); }
+      if [[ -f "$ROOT_DIR/$impl/build.sh" && ! -x "$ROOT_DIR/$impl/build.sh" ]]; then
+            warn "$impl/build.sh is not executable"
+            PROBLEMS=$((PROBLEMS + 1))
+      fi
+      if [[ -f "$ROOT_DIR/$impl/run.sh" && ! -x "$ROOT_DIR/$impl/run.sh" ]]; then
+            warn "$impl/run.sh is not executable"
+            PROBLEMS=$((PROBLEMS + 1))
+      fi
+      [[ -f "$ROOT_DIR/$impl/run.sh" ]] || {
+            warn "$impl has no run.sh"
+            PROBLEMS=$((PROBLEMS + 1))
+      }
 
-  # The tier every number from this implementation will be filed under
-  # (SPEC.md 1.1, 5.1). An undeclared tier cannot be grouped, so it is an error.
-  problem="$(impl_env_problem "$ROOT_DIR/$impl")"
-  if [[ -n "$problem" ]]; then
-    warn "$impl: $problem"
-    PROBLEMS=$((PROBLEMS + 1))
-    tier=""
-  else
-    tier=" [$HTTP_LAYER]"
-  fi
-  read_impl_env "$ROOT_DIR/$impl"
+      # The tier every number from this implementation will be filed under
+      # (SPEC.md 1.1, 5.1). An undeclared tier cannot be grouped, so it is an error.
+      problem="$(impl_env_problem "$ROOT_DIR/$impl")"
+      if [[ -n "$problem" ]]; then
+            warn "$impl: $problem"
+            PROBLEMS=$((PROBLEMS + 1))
+            tier=""
+      else
+            tier=" [$HTTP_LAYER]"
+      fi
+      read_impl_env "$ROOT_DIR/$impl"
 
-  # The toolchain comes from impl.env, not from a language table in here: adding
-  # a language must not require editing the harness (SPEC.md 2.2, 5.1).
-  printf '  %-22s %s%s\n' "$impl" "${RUNTIME:-?}" "$tier"
+      # The toolchain comes from impl.env, not from a language table in here: adding
+      # a language must not require editing the harness (SPEC.md 2.2, 5.1).
+      printf '  %-22s %s%s\n' "$impl" "${RUNTIME:-?}" "$tier"
 
-  if [[ -n "$TOOLCHAIN_CMD" && -z "${SEEN_TOOL[$TOOLCHAIN_CMD]:-}" ]]; then
-    SEEN_TOOL[$TOOLCHAIN_CMD]=1
-    if out="$($TOOLCHAIN_CMD 2>&1 | head -1)"; then
-      printf '    %-20s %s\n' "" "$out"
-    else
-      warn "toolchain command failed: $TOOLCHAIN_CMD (needed by $impl)"
-      PROBLEMS=$((PROBLEMS + 1))
-    fi
-  fi
+      if [[ -n "$TOOLCHAIN_CMD" && -z "${SEEN_TOOL[$TOOLCHAIN_CMD]:-}" ]]; then
+            SEEN_TOOL[$TOOLCHAIN_CMD]=1
+            if out="$($TOOLCHAIN_CMD 2>&1 | head -1)"; then
+                  printf '    %-20s %s\n' "" "$out"
+            else
+                  warn "toolchain command failed: $TOOLCHAIN_CMD (needed by $impl)"
+                  PROBLEMS=$((PROBLEMS + 1))
+            fi
+      fi
 done
 
 # --- summary ----------------------------------------------------------------
 title "Summary"
 if [[ $PROBLEMS -eq 0 ]]; then
-  ok "environment is ready; benchmarks will be marked publishable"
-  exit 0
+      ok "environment is ready; benchmarks will be marked publishable"
+      exit 0
 fi
 
 warn "$PROBLEMS issue(s) found"
 if [[ $STRICT -eq 1 ]]; then
-  exit 1
+      exit 1
 fi
 echo
 echo "Benchmarks can still run, but results will be marked \"publishable\": false."

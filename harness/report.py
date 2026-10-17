@@ -84,7 +84,11 @@ def load_runs(out_dir: Path):
                 continue
             row = json.loads(line)
             wrk_path = out_dir / row["output"]
-            parsed = parse_wrk(wrk_path.read_text(errors="replace")) if wrk_path.exists() else {}
+            parsed = (
+                parse_wrk(wrk_path.read_text(errors="replace"))
+                if wrk_path.exists()
+                else {}
+            )
             row.update(parsed)
 
             key = (row["impl"], row["scenario"])
@@ -163,14 +167,20 @@ def human_bytes(n) -> str:
 
 
 TIER_TITLE = {
-    "hand-rolled": ("Hand-rolled HTTP", "each implementation parses HTTP/1.1 itself "
-                    "over the runtime's raw sockets — this is the ranking that compares "
-                    "languages"),
-    "runtime": ("Runtime-provided HTTP", "HTTP parsing and framing come from the runtime's "
-                "own distribution (e.g. `node:http`). Compared within this group only, and "
-                "**not** against the group above — the gap between the two groups is what "
-                "the runtime buys, which is a different question from which language is "
-                "faster"),
+    "hand-rolled": (
+        "Hand-rolled HTTP",
+        "each implementation parses HTTP/1.1 itself "
+        "over the runtime's raw sockets — this is the ranking that compares "
+        "languages",
+    ),
+    "runtime": (
+        "Runtime-provided HTTP",
+        "HTTP parsing and framing come from the runtime's "
+        "own distribution (e.g. `node:http`). Compared within this group only, and "
+        "**not** against the group above — the gap between the two groups is what "
+        "the runtime buys, which is a different question from which language is "
+        "faster",
+    ),
 }
 
 
@@ -199,10 +209,12 @@ def markdown(rows: list[dict], meta: dict, rejected: dict | None = None) -> str:
     lines = []
     unstable = [r for r in rows if (r["rps_spread_pct"] or 0) > 5.0]
 
-    lines.append(f"Measured {meta.get('started', '?')} on "
-                 f"{meta.get('cpu_model', 'unknown CPU')} "
-                 f"({meta.get('logical_cpus', '?')} logical CPUs), "
-                 f"kernel {meta.get('kernel', '?')}.")
+    lines.append(
+        f"Measured {meta.get('started', '?')} on "
+        f"{meta.get('cpu_model', 'unknown CPU')} "
+        f"({meta.get('logical_cpus', '?')} logical CPUs), "
+        f"kernel {meta.get('kernel', '?')}."
+    )
     lines.append("")
     lines.append(f"- commit `{meta.get('commit') or 'working tree'}`")
     lines.append(f"- governor(s): {', '.join(meta.get('governors') or ['unknown'])}")
@@ -210,21 +222,29 @@ def markdown(rows: list[dict], meta: dict, rejected: dict | None = None) -> str:
     lines.append(f"- pinning: server `{pin.get('server')}`, load `{pin.get('load')}`")
     gen = meta.get("generator") or {}
     rate = f" at {gen['rate']} req/s" if gen.get("rate") else ""
-    lines.append(f"- generator: {gen.get('name')} — {gen.get('version') or 'version unknown'}{rate}")
+    lines.append(
+        f"- generator: {gen.get('name')} — {gen.get('version') or 'version unknown'}{rate}"
+    )
     params = meta.get("params") or {}
-    lines.append(f"- {params.get('runs')} runs per cell, {params.get('duration')} each, "
-                 f"{params.get('connections')} connections, "
-                 f"{params.get('warmup_s')}s warmup discarded")
+    lines.append(
+        f"- {params.get('runs')} runs per cell, {params.get('duration')} each, "
+        f"{params.get('connections')} connections, "
+        f"{params.get('warmup_s')}s warmup discarded"
+    )
     if meta.get("publishable"):
         lines.append("- environment marked **publishable**")
     else:
-        lines.append("- ⚠️ **not publishable** — the machine was not in a comparable state "
-                     "(see `meta.json`)")
+        lines.append(
+            "- ⚠️ **not publishable** — the machine was not in a comparable state "
+            "(see `meta.json`)"
+        )
     lines.append("")
     if unstable:
-        lines.append(f"⚠️ {len(unstable)} cell(s) varied by more than 5% across runs and are "
-                     "not stable enough to rank: "
-                     + ", ".join(f"`{r['impl']}/{r['scenario']}`" for r in unstable))
+        lines.append(
+            f"⚠️ {len(unstable)} cell(s) varied by more than 5% across runs and are "
+            "not stable enough to rank: "
+            + ", ".join(f"`{r['impl']}/{r['scenario']}`" for r in unstable)
+        )
         lines.append("")
     if rejected:
         total = sum(len(v) for v in rejected.values())
@@ -250,19 +270,23 @@ def markdown(rows: list[dict], meta: dict, rejected: dict | None = None) -> str:
     if other:
         lines.append("### Unclassified")
         lines.append("")
-        lines.append("These declare no valid `HTTP_LAYER` and cannot be grouped; treat them "
-                     "as unreliable (SPEC.md 5.1).")
+        lines.append(
+            "These declare no valid `HTTP_LAYER` and cannot be grouped; treat them "
+            "as unreliable (SPEC.md 5.1)."
+        )
         lines.append("")
         lines.extend(tier_table(other))
         lines.append("")
 
-    lines.append("`req/s` is the median of the runs and describes **closed-loop maximum "
-                 "throughput**; the p50/p99 columns describe queueing at that saturation "
-                 "point, not latency at a target rate. `CPU ms/req` is the most portable "
-                 "number here — it is how much CPU the server spends per request, "
-                 "independent of how many cores it had. Peak RSS is not comparable across "
-                 "runtimes, and `binary` is blank for interpreted implementations. See "
-                 "`docs/methodology.md`.")
+    lines.append(
+        "`req/s` is the median of the runs and describes **closed-loop maximum "
+        "throughput**; the p50/p99 columns describe queueing at that saturation "
+        "point, not latency at a target rate. `CPU ms/req` is the most portable "
+        "number here — it is how much CPU the server spends per request, "
+        "independent of how many cores it had. Peak RSS is not comparable across "
+        "runtimes, and `binary` is blank for interpreted implementations. See "
+        "`docs/methodology.md`."
+    )
     return "\n".join(lines)
 
 
@@ -293,11 +317,15 @@ def update_readme(table: str) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--dir", required=True, help="results directory")
-    ap.add_argument("--update-readme", action="store_true",
-                    help="splice the table into README.md between the BENCH-TABLE markers")
+    ap.add_argument(
+        "--update-readme",
+        action="store_true",
+        help="splice the table into README.md between the BENCH-TABLE markers",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.dir)
@@ -316,22 +344,44 @@ def main() -> int:
     rejected_n = sum(len(v) for v in rejected.values())
 
     # summary.csv — one row per (impl, scenario), medians across runs.
-    fields = ["impl", "http_layer", "runtime", "scenario", "runs", "connections", "rps",
-              "rps_spread_pct", "p50", "p75", "p90", "p99", "peak_rss_kb",
-              "cpu_ms_per_req", "binary_bytes", "loc"]
+    fields = [
+        "impl",
+        "http_layer",
+        "runtime",
+        "scenario",
+        "runs",
+        "connections",
+        "rps",
+        "rps_spread_pct",
+        "p50",
+        "p75",
+        "p90",
+        "p99",
+        "peak_rss_kb",
+        "cpu_ms_per_req",
+        "binary_bytes",
+        "loc",
+    ]
     csv_path = out_dir / "summary.csv"
     with open(csv_path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: ("" if row.get(k) is None else round(row[k], 4)
-                                 if isinstance(row.get(k), float) else row.get(k))
-                             for k in fields})
+            writer.writerow(
+                {
+                    k: (
+                        ""
+                        if row.get(k) is None
+                        else round(row[k], 4)
+                        if isinstance(row.get(k), float)
+                        else row.get(k)
+                    )
+                    for k in fields
+                }
+            )
 
     table = markdown(rows, meta, rejected)
-    (out_dir / "RESULTS.md").write_text(
-        f"# Results — {out_dir.name}\n\n{table}\n"
-    )
+    (out_dir / "RESULTS.md").write_text(f"# Results — {out_dir.name}\n\n{table}\n")
 
     note = f", {rejected_n} run(s) rejected" if rejected_n else ""
     print(f"  {len(rows)} cells{note} -> {rel(csv_path)}")
