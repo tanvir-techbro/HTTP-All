@@ -293,7 +293,7 @@ HTTP_LAYER=hand-rolled          # hand-rolled | runtime
 # The runtime and version these numbers describe. Required.
 RUNTIME=go 1.24.0
 
-# Comma-separated source extensions for the LOC count (SPEC.md 7.1). Required.
+# Comma-separated source extensions for the LOC count (see below). Required.
 # Without this the harness has no language table to fall back on and would
 # report LOC as 0, which reads as "this implementation costs nothing".
 SOURCE_EXT=go
@@ -302,6 +302,12 @@ SOURCE_EXT=go
 # checked to exist by harness/doctor.sh. Required.
 TOOLCHAIN_CMD=go version
 ```
+
+`LOC` is a **physical** line count: non-blank lines, comments included, over the files that
+match `SOURCE_EXT`, excluding build output and vendored trees (`bin`, `target`, `vendor`,
+`node_modules`, …). It is deliberately uniform across languages — a comment-stripped count
+would need a per-language comment table, which §5.1 forbids, and would misread C preprocessor
+lines such as `#include` as comments.
 
 `HTTP_LAYER=runtime` is only legitimate for an implementation that delegates HTTP parsing
 and framing to its own language distribution. Claiming `hand-rolled` while delegating is a
@@ -370,6 +376,11 @@ build flags, commit, pinning, generator and generator version.
 Numbers are reported as the **median of N runs** (default 3), with min/max spread, and any
 scenario whose runs spread by more than 5% is flagged as unstable. See
 `docs/methodology.md`.
+
+A run the load generator could not complete — an unreachable server, zero requests, any
+socket error, or a non-2xx response the contract does not call for — is **rejected**, not
+recorded as zero throughput. It is excluded from the medians, named in the report, and marks
+the run non-publishable.
 
 ### 7.1 Grouping
 

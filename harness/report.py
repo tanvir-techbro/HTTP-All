@@ -70,9 +70,13 @@ def parse_wrk(text: str) -> dict:
     return out
 
 
-def load_runs(out_dir: Path) -> dict[str, dict]:
-    """(impl, scenario) -> {run number -> measurement}"""
+def load_runs(out_dir: Path):
+    """(impl, scenario) -> {run number -> measurement}, and the rejected runs.
+
+    A run the generator could not complete is excluded rather than averaged in as
+    a zero; its reason is returned so the report can say so out loud."""
     runs: dict[tuple[str, str], dict[int, dict]] = defaultdict(dict)
+    rejected: dict[tuple[str, str], list[str]] = defaultdict(list)
     with open(out_dir / "runs.jsonl") as fh:
         for line in fh:
             line = line.strip()
@@ -83,14 +87,22 @@ def load_runs(out_dir: Path) -> dict[str, dict]:
             parsed = parse_wrk(wrk_path.read_text(errors="replace")) if wrk_path.exists() else {}
             row.update(parsed)
 
+            key = (row["impl"], row["scenario"])
+            reason = (row.get("error") or "").strip()
+            if not reason and "rps" not in parsed:
+                reason = "no throughput in the load generator output"
+            if reason:
+                rejected[key].append(f"run {row.get('run', '?')}: {reason}")
+                continue
+
             requests = parsed.get("requests")
             ticks = row.get("cpu_ticks") or 0
             clk = row.get("clk_tck") or 100
             if requests:
                 row["cpu_ms_per_req"] = (ticks / clk) * 1000.0 / requests
                 row["us_per_req"] = (ticks / clk) * 1e6 / requests
-            runs[(row["impl"], row["scenario"])][row["run"]] = row
-    return runs
+            runs[key][row["run"]] = row
+    return runs, rejected
 
 
 def median(values: list[float]) -> float | None:
@@ -183,7 +195,7 @@ def tier_table(rows: list[dict]) -> list[str]:
     return lines
 
 
-def markdown(rows: list[dict], meta: dict) -> str:
+def markdown(rows: list[dict], meta: dict, rejected: dict | None = None) -> str:
     lines = []
     unstable = [r for r in rows if (r["rps_spread_pct"] or 0) > 5.0]
 
@@ -213,6 +225,12 @@ def markdown(rows: list[dict], meta: dict) -> str:
         lines.append(f"⚠️ {len(unstable)} cell(s) varied by more than 5% across runs and are "
                      "not stable enough to rank: "
                      + ", ".join(f"`{r['impl']}/{r['scenario']}`" for r in unstable))
+        lines.append("")
+    if rejected:
+        total = sum(len(v) for v in rejected.values())
+        lines.append(f"⚠️ {total} run(s) were rejected and excluded from the medians:")
+        for (impl, scenario), reasons in sorted(rejected.items()):
+            lines.append(f"- `{impl}/{scenario}` — {'; '.join(reasons)}")
         lines.append("")
 
     # Grouped by tier and never ranked across tiers (SPEC.md 1.1, 7.1).
@@ -293,8 +311,9 @@ def main() -> int:
     if (out_dir / "meta.json").exists():
         meta = json.loads((out_dir / "meta.json").read_text())
 
-    runs = load_runs(out_dir)
+    runs, rejected = load_runs(out_dir)
     rows = summarise(runs)
+    rejected_n = sum(len(v) for v in rejected.values())
 
     # summary.csv — one row per (impl, scenario), medians across runs.
     fields = ["impl", "http_layer", "runtime", "scenario", "runs", "connections", "rps",
@@ -309,12 +328,13 @@ def main() -> int:
                                  if isinstance(row.get(k), float) else row.get(k))
                              for k in fields})
 
-    table = markdown(rows, meta)
+    table = markdown(rows, meta, rejected)
     (out_dir / "RESULTS.md").write_text(
         f"# Results — {out_dir.name}\n\n{table}\n"
     )
 
-    print(f"  {len(rows)} cells -> {rel(csv_path)}")
+    note = f", {rejected_n} run(s) rejected" if rejected_n else ""
+    print(f"  {len(rows)} cells{note} -> {rel(csv_path)}")
     if args.update_readme:
         update_readme(table)
     return 0

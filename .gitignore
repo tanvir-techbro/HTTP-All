@@ -2,6 +2,7 @@
 # a contribution in an unanticipated language must not have to fight .gitignore
 # to keep its build tree out of the repo.
 bin/
+build/
 target/
 .dub/
 zig-out/
@@ -16,6 +17,7 @@ obj/
 *.so
 *.dylib
 *.a
+compile_commands.json
 
 # Harness leftovers.
 __pycache__/

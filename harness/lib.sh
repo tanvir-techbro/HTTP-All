@@ -202,7 +202,9 @@ impl_name() { printf '%s' "${1//\//-}"; }
 # a new language is a row in impl.env, not an edit to the harness.
 impl_env_value() {
   awk -F= -v key="$2" '
-    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+    # Strip an inline comment and trailing space, matching the Python validator in
+    # conformance.py: the SPEC 5.1 example annotates every value with "  # ...".
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" { sub(/^[^=]*=[[:space:]]*/, ""); sub(/#.*$/, ""); sub(/[[:space:]]+$/, ""); print; exit }
   ' "$1/impl.env" 2>/dev/null
 }
 
@@ -279,10 +281,6 @@ count_loc() {
     xargs -0 -r awk '
       { sub(/^[ \t]+/, "") }
       /^$/ { next }
-      /^\/\// { next }
-      /^\/\*/ { next }
-      /^\*/ { next }
-      /^#/ { next }
       { n++ }
       END { print n + 0 }' |
     awk '{ t += $1 } END { print t + 0 }'

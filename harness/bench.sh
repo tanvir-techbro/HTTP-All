@@ -155,7 +155,7 @@ done
 
 # --- helpers -----------------------------------------------------------------
 S_NAME=""; S_METHOD=""; S_PATH=""; S_SCRIPT=""
-RUN_RSS_KB=0; RUN_TICKS=0
+RUN_RSS_KB=0; RUN_TICKS=0; RUN_ERROR=""; RUN_SOCK_ERR=0
 
 log_run() {
   python3 - "$OUT/runs.jsonl" "$@" <<'PY'
@@ -208,6 +208,22 @@ measure() {
   RUN_RSS_KB="$(peak_rss_kb "$SERVER_PID")"
   RUN_TICKS="$(cpu_ticks "$SERVER_PID")"
   stop_server
+
+  # A run the generator could not complete is not a slow result, it is no result.
+  # Refusing to pass it through as a silent zero is the whole point of recording it.
+  RUN_ERROR=""
+  RUN_SOCK_ERR="$(awk '/Socket errors:/{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i} END{print s+0}' "$outfile")"
+  local bad
+  bad="$(awk -F': *' '/Non-2xx or 3xx responses:/{print $2+0}' "$outfile")"
+  if ! grep -q '^Requests/sec:' "$outfile"; then
+    RUN_ERROR="load generator produced no result (server unreachable?)"
+  elif ! grep -qE '[1-9][0-9]* requests in' "$outfile"; then
+    RUN_ERROR="load generator completed 0 requests"
+  elif [[ "${RUN_SOCK_ERR:-0}" -gt 0 ]]; then
+    RUN_ERROR="load generator reported $RUN_SOCK_ERR socket error(s); throughput is understated"
+  elif [[ "${bad:-0}" -gt 0 ]]; then
+    RUN_ERROR="$bad non-2xx/3xx response(s) — the load did not hit the contract response"
+  fi
 }
 
 # --- measure -----------------------------------------------------------------
@@ -243,15 +259,19 @@ for impl in "${IMPLS[@]}"; do
 
     for ((run = 1; run <= RUNS; run++)); do
       port="$(free_port)"
-      outfile="$OUT/$name__$S_NAME__r$run.wrk"
+      outfile="$OUT/${name}__${S_NAME}__r${run}.wrk"
       log "$name / $S_NAME — run $run/$RUNS"
       measure "$name" "$impl" "$port" "$outfile" "$DURATION"
+      if [[ -n "$RUN_ERROR" ]]; then
+        PUBLISHABLE=0
+        warn "$name / $S_NAME run $run rejected: $RUN_ERROR"
+      fi
       log_run "impl=$name" "impl_dir=$impl" "scenario=$S_NAME" "run=$run" \
         "http_layer=$HTTP_LAYER" "runtime=$RUNTIME" \
         "duration_s=${DURATION%s}" "connections=$CONNS" "threads=$THREADS" \
         "peak_rss_kb=$RUN_RSS_KB" "cpu_ticks=$RUN_TICKS" "clk_tck=$CLK" \
         "binary_bytes=$BIN_BYTES" "loc=$LOC" "generator=$GENERATOR" \
-        "toolchain=$TOOLCHAIN_VERSION" \
+        "toolchain=$TOOLCHAIN_VERSION" "socket_errors=$RUN_SOCK_ERR" "error=$RUN_ERROR" \
         "server_cpus=$SERVER_CPUS" "load_cpus=$LOAD_CPUS" "output=$(basename "$outfile")"
     done
   done
@@ -261,6 +281,7 @@ ELAPSED=$(( $(date +%s) - START_ALL ))
 
 # --- metadata ----------------------------------------------------------------
 export PUBLISHABLE GEN_VERSION RUNS DURATION CONNS THREADS WARMUP ELAPSED
+export SERVER_CPUS LOAD_CPUS
 export GOV_UNIQ
 export GENERATOR WRK
 python3 - "$OUT/meta.json" <<'PY'
@@ -361,7 +382,10 @@ PY
 
 # --- report ------------------------------------------------------------------
 title "Report"
-python3 "$HARNESS_DIR/report.py" --dir "$OUT" --update-readme || \
+# Deliberately no --update-readme: README is the published table, and `make results`
+# is the explicit step that rewrites it. A throwaway or unpublishable run must not
+# overwrite it. The table for this run is in this directory as RESULTS.md.
+python3 "$HARNESS_DIR/report.py" --dir "$OUT" || \
   warn "report generation failed; raw output is kept in ${OUT#$ROOT_DIR/}"
 
 [[ "$KEEP" -eq 1 ]] || rm -rf "$OUT/tmp"
